@@ -1,12 +1,130 @@
 import * as esprima from 'esprima';
 import * as esgraph from 'esgraph';
+import * as escodegen from 'escodegen';
+
+/*************************
+ * coloring the cfg part *
+ *************************/
+
+const generateVariablesDecelerations_Paint = (varMap) => {
+    let generatedString = '';
+    for (let i = 0 ; i < varMap.length ; i++){
+        generatedString += 'let ' + varMap[i]['name'] + ' = ' + varMap[i]['value'] + ';';
+    }
+    return generatedString;
+};
+
+const myEval_Paint = (expressionString , varMap) => {
+    let varsDecelerationsString = generateVariablesDecelerations_Paint(varMap);
+    return eval(varsDecelerationsString + expressionString);
+};
+
+const getEntryNode = (cfgJSON) => {
+    for (let i = 0 ; i < cfgJSON.length ; i++){
+        if(cfgJSON[i]['type'] === 'entry')
+            return i;
+    }
+    return -1;
+};
+
+// Statement must be Expression
+const evalExpression = (parsedJSON, valuesMap) => {
+    let epressionString = escodegen.generate(parsedJSON);
+    return myEval_Paint(epressionString, valuesMap);
+};
+
+const changeValue = (valuesMap, name, newValue) => {
+    for (let i = 0 ; i < valuesMap.length ; i++){
+        if(valuesMap[i]['name'] === name){
+            valuesMap[i]['value'] = newValue;
+            return true;
+        }
+    }
+    return false;
+};
+
+function handleVarDeclaration(astNode, valuesMap) {
+    for (let i = 0; i < astNode['declarations'].length; i++)
+        if (!changeValue(valuesMap, astNode['declarations'][i]['id']['name'],
+            evalExpression(astNode['declarations'][i]['init'], valuesMap))) {
+            valuesMap.push({
+                'name': astNode['declarations'][i]['id']['name'],
+                'value': evalExpression(astNode['declarations'][i]['init'], valuesMap)
+            });
+        }
+    return valuesMap;
+}
+
+function handleAssignment(valuesMap, astNode) {
+    if (!changeValue(valuesMap, astNode['left']['name'],
+        evalExpression(astNode['right'], valuesMap))) {
+        valuesMap.push({
+            'name': astNode['left']['name'],
+            'value': evalExpression(astNode['right'], valuesMap)
+        });
+    }
+    return valuesMap;
+}
+
+const updateValuesMap = (astNode, valuesMap) => {
+    if(astNode['type'] === 'VariableDeclaration'){
+        return handleVarDeclaration(astNode, valuesMap);
+    } else if (astNode['type'] === 'AssignmentExpression'){
+        return handleAssignment(valuesMap, astNode);
+    } else {
+        return valuesMap;
+    }
+
+};
+
+const coloringCFG = (cfgJSON, valuesMap) => {
+    let currNode = cfgJSON[getEntryNode(cfgJSON)]/*, exitNodeIndex = getExitNode(cfgJSON);*/;
+
+    while(currNode['type'] !== 'exit'){
+        currNode['isGreen'] = true;
+        if(currNode['normal'] !== undefined){
+            valuesMap = updateValuesMap(currNode['astNode'], valuesMap);
+            currNode = currNode['normal'];
+        } else if(currNode['false'] !== undefined || currNode['true'] !== undefined){
+            if(evalExpression(currNode['astNode'], valuesMap))
+                currNode = currNode['true'];
+            else
+                currNode = currNode['false'];
+        }
+    }
+    currNode['isGreen'] = true;
+
+    return cfgJSON;
+};
+
+
+
+
+/*************************
+ * building the cfg part *
+ *************************/
 
 const buildCFG = (codeToParse) => {
     let cfgJSON = esgraph(esprima.parse(codeToParse, { range: true })['body'][0]['body'])[2];
     cfgJSON = removeEntry(cfgJSON);
     cfgJSON = removeExit(cfgJSON);
-
+    setReturnAsExit(cfgJSON);
+    addNodesCodeString(cfgJSON);
     return cfgJSON;
+};
+
+const setReturnAsExit = (cfgJSON) => {
+    for (let i = 0 ; i < cfgJSON.length ; i++){
+        if(cfgJSON[i]['astNode']['type'] === 'ReturnStatement'){
+            let returnNode = cfgJSON[i];
+            returnNode['type'] = 'exit';
+        }
+    }
+};
+
+const addNodesCodeString = (cfgJSON) => {
+    for (let i = 0 ; i < cfgJSON.length ; i++)
+        cfgJSON[i]['codeString'] = escodegen.generate(cfgJSON[i]['astNode']);
 };
 
 const getExitNode = (flowNodeArray) => {
@@ -21,8 +139,6 @@ const removeExitFromNode = (flowNode) => {
     if(flowNode['normal'] !== undefined && flowNode['normal']['type'] === 'exit'){
         delete  flowNode['normal'];
         flowNode['next'] = [];
-        //let exitNextIndex = getExitNode(flowNode['next']);
-        //delete flowNode['next'][exitNextIndex];
     }
 };
 
@@ -72,7 +188,7 @@ const adaptVizEdges = (dottedFormat) => {
 };
 
 const handleVertice = (verticeJSON, verticeNum) => {
-    let verticeAdapted = 'node' + verticeNum + ' [label=' + verticeJSON['codeString'];
+    let verticeAdapted = 'node' + verticeNum + ' [label="' + verticeJSON['codeString'] + '"';
     if(verticeJSON['isGreen'])
         verticeAdapted += ', color=green, style=filled';
     return verticeAdapted + ', shape=' + ((verticeJSON['false'] || verticeJSON['true']) ? 'diamond' : 'box') + ']\n';
@@ -91,4 +207,38 @@ const parseCode = (codeToParse) => {
     return esprima.parseScript(codeToParse);
 };
 
-export {parseCode, buildCFG, adaptViz};
+const changeCountParenthesis = (valuesString, i, countParenthesis) => {
+    if (valuesString.charAt(i) === ']')
+        countParenthesis--;
+    else if ((valuesString.charAt(i) === '['))
+        countParenthesis++;
+    return countParenthesis;
+};
+
+const getValueMap = (valuesString, paramsNames) => {
+    let startIndex = 0, countParenthesis = 0, valuesArray = [], currValue=0;
+
+    if (valuesString.length === 0)
+        return [];
+
+    for (let i = 0 ; i < valuesString.length ; i++){
+        if(countParenthesis === 0 && valuesString.charAt(i) === ','){
+            valuesArray.push({'name': paramsNames[currValue++], 'value': valuesString.substring(startIndex, i)});
+            startIndex = i+1;
+        }
+        countParenthesis = changeCountParenthesis(valuesString, i, countParenthesis);
+    }
+    valuesArray.push({'name': paramsNames[currValue],
+        'value': valuesString.substring(startIndex, valuesString.length)});
+    return valuesArray;
+};
+
+const getParamsNames = (paramsJSON) => {
+    let ans = [];
+    for (let i = 0 ; i < paramsJSON.length ; i++){
+        ans.push(paramsJSON[i]['name']);
+    }
+    return ans;
+};
+
+export {parseCode, buildCFG, adaptViz, getValueMap, getParamsNames, coloringCFG};

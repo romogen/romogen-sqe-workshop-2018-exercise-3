@@ -1,5 +1,5 @@
 import $ from 'jquery';
-import {parseCode, buildCFG, adaptViz} from './code-analyzer';
+import {parseCode, buildCFG, adaptViz, getValueMap, getParamsNames, coloringCFG} from './code-analyzer';
 import * as esprima from 'esprima';
 import * as esgraph from 'esgraph';
 import Viz from 'viz.js';
@@ -8,12 +8,12 @@ import { Module, render } from 'viz.js/full.render.js';
 $(document).ready(function () {
     $('#codeSubmissionButton').click(() => {
         let codeToParse = $('#codePlaceholder').val();
-        //let parsedCode = parseCode(codeToParse);
-        //let dottedFormat = esgraph.dot(buildCFG(codeToParse));
-        let vizAdaptedDot = adaptViz(buildCFG(codeToParse));
+        let paramsNamesArray = getParamsNames(esprima.parseScript(codeToParse)['body'][0]['params']);
+        let valueMapArray = getValueMap($('#valuesArray').val(), paramsNamesArray);
+
+        let vizAdaptedDot = adaptViz(coloringCFG(buildCFG(codeToParse), valueMapArray));
         renderCfg(vizAdaptedDot);
 
-        $('#parsedCode').val(JSON.stringify(parsedCode[0], null, 2));
     });
 });
 
