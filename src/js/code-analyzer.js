@@ -9,7 +9,12 @@ import * as escodegen from 'escodegen';
 const generateVariablesDecelerations_Paint = (varMap) => {
     let generatedString = '';
     for (let i = 0 ; i < varMap.length ; i++){
-        generatedString += 'let ' + varMap[i]['name'] + ' = ' + varMap[i]['value'] + ';';
+        if(Array.isArray(varMap[i]['value'])){
+            generatedString += 'let ' + varMap[i]['name'] + ' = ' + JSON.stringify(varMap[i]['value']) + ';';
+        }
+        else{
+            generatedString += 'let ' + varMap[i]['name'] + ' = ' + varMap[i]['value'] + ';';
+        }
     }
     return generatedString;
 };
@@ -19,13 +24,14 @@ const myEval_Paint = (expressionString , varMap) => {
     return eval(varsDecelerationsString + expressionString);
 };
 
-const getEntryNode = (cfgJSON) => {
+/*const getEntryNode = (cfgJSON) => {
     for (let i = 0 ; i < cfgJSON.length ; i++){
         if(cfgJSON[i]['type'] === 'entry')
             return i;
+        else
+            continue;
     }
-    return -1;
-};
+};*/
 
 // Statement must be Expression
 const evalExpression = (parsedJSON, valuesMap) => {
@@ -40,52 +46,41 @@ const changeValue = (valuesMap, name, newValue) => {
             return true;
         }
     }
-    return false;
 };
 
 function handleVarDeclaration(astNode, valuesMap) {
-    for (let i = 0; i < astNode['declarations'].length; i++)
-        if (!changeValue(valuesMap, astNode['declarations'][i]['id']['name'],
-            evalExpression(astNode['declarations'][i]['init'], valuesMap))) {
-            valuesMap.push({
-                'name': astNode['declarations'][i]['id']['name'],
-                'value': evalExpression(astNode['declarations'][i]['init'], valuesMap)
-            });
-        }
+    for (let i = 0; i < astNode['declarations'].length; i++) {
+        /*if (!changeValue(valuesMap, astNode['declarations'][i]['id']['name'],
+            evalExpression(astNode['declarations'][i]['init'], valuesMap))) */
+        valuesMap.push({'name': astNode['declarations'][i]['id']['name'],
+            'value': evalExpression(astNode['declarations'][i]['init'], valuesMap)});
+    }
     return valuesMap;
 }
 
 function handleAssignment(valuesMap, astNode) {
-    if (!changeValue(valuesMap, astNode['left']['name'],
-        evalExpression(astNode['right'], valuesMap))) {
-        valuesMap.push({
-            'name': astNode['left']['name'],
-            'value': evalExpression(astNode['right'], valuesMap)
-        });
-    }
+    /*if (!changeValue(valuesMap, astNode['left']['name'],
+        evalExpression(astNode['right'], valuesMap)))*/
+    /*valuesMap.push({
+        'name': astNode['left']['name'],
+        'value': evalExpression(astNode['right'], valuesMap)});*/
+    changeValue(valuesMap, astNode['left']['name'],
+        evalExpression(astNode['right'], valuesMap));
     return valuesMap;
+
 }
 
-const updateValuesMap = (astNode, valuesMap) => {
-    if(astNode['type'] === 'VariableDeclaration'){
-        return handleVarDeclaration(astNode, valuesMap);
-    } else if (astNode['type'] === 'AssignmentExpression'){
-        return handleAssignment(valuesMap, astNode);
-    } else {
-        return valuesMap;
-    }
-
-};
-
 const coloringCFG = (cfgJSON, valuesMap) => {
-    let currNode = cfgJSON[getEntryNode(cfgJSON)]/*, exitNodeIndex = getExitNode(cfgJSON);*/;
-
+    let currNode = cfgJSON[0]/*, exitNodeIndex = getExitNode(cfgJSON);*/;
+    if(cfgJSON.length === 1){
+        cfgJSON[0]['isGreen'] = true;
+        return cfgJSON; }
     while(currNode['type'] !== 'exit'){
         currNode['isGreen'] = true;
         if(currNode['normal'] !== undefined){
             valuesMap = updateValuesMap(currNode['astNode'], valuesMap);
             currNode = currNode['normal'];
-        } else if(currNode['false'] !== undefined || currNode['true'] !== undefined){
+        } else /*if(currNode['false'] !== undefined || currNode['true'] !== undefined)*/{
             if(evalExpression(currNode['astNode'], valuesMap))
                 currNode = currNode['true'];
             else
@@ -93,8 +88,18 @@ const coloringCFG = (cfgJSON, valuesMap) => {
         }
     }
     currNode['isGreen'] = true;
-
     return cfgJSON;
+};
+
+const updateValuesMap = (astNode, valuesMap) => {
+    if(astNode['type'] === 'VariableDeclaration'){
+        return handleVarDeclaration(astNode, valuesMap);
+    } else /*if (astNode['type'] === 'AssignmentExpression')*/{
+        return handleAssignment(valuesMap, astNode);
+    } /*else {
+        return valuesMap;
+    }*/
+
 };
 
 
@@ -113,7 +118,17 @@ const buildCFG = (codeToParse) => {
     return cfgJSON;
 };
 
+const removeExitFromNodeNext = (flowNode)=> {
+    let exitIndex = getExitNode(flowNode['next']);
+    if(exitIndex === -1)
+        return;
+    flowNode['next'] = flowNode['next'].slice(0, exitIndex).concat(flowNode['next'].slice(exitIndex+1,
+        flowNode['next'].length));
+};
+
 const setReturnAsExit = (cfgJSON) => {
+    if (cfgJSON.length === 1)
+        return;
     for (let i = 0 ; i < cfgJSON.length ; i++){
         if(cfgJSON[i]['astNode']['type'] === 'ReturnStatement'){
             let returnNode = cfgJSON[i];
@@ -140,6 +155,7 @@ const removeExitFromNode = (flowNode) => {
         delete  flowNode['normal'];
         flowNode['next'] = [];
     }
+    removeExitFromNodeNext(flowNode);
 };
 
 const removeExit = (cfgJSON) => {
@@ -203,10 +219,6 @@ const adaptVizVertices = (dottedFormat) => {
     return adaptedString;
 };
 
-const parseCode = (codeToParse) => {
-    return esprima.parseScript(codeToParse);
-};
-
 const changeCountParenthesis = (valuesString, i, countParenthesis) => {
     if (valuesString.charAt(i) === ']')
         countParenthesis--;
@@ -223,13 +235,13 @@ const getValueMap = (valuesString, paramsNames) => {
 
     for (let i = 0 ; i < valuesString.length ; i++){
         if(countParenthesis === 0 && valuesString.charAt(i) === ','){
-            valuesArray.push({'name': paramsNames[currValue++], 'value': valuesString.substring(startIndex, i)});
+            valuesArray.push({'name': paramsNames[currValue++], 'value': eval(valuesString.substring(startIndex, i))});
             startIndex = i+1;
         }
         countParenthesis = changeCountParenthesis(valuesString, i, countParenthesis);
     }
     valuesArray.push({'name': paramsNames[currValue],
-        'value': valuesString.substring(startIndex, valuesString.length)});
+        'value': eval(valuesString.substring(startIndex, valuesString.length))});
     return valuesArray;
 };
 
@@ -241,4 +253,4 @@ const getParamsNames = (paramsJSON) => {
     return ans;
 };
 
-export {parseCode, buildCFG, adaptViz, getValueMap, getParamsNames, coloringCFG};
+export {buildCFG, adaptViz, getValueMap, getParamsNames, coloringCFG};

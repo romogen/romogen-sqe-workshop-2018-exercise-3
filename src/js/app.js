@@ -1,7 +1,6 @@
 import $ from 'jquery';
-import {parseCode, buildCFG, adaptViz, getValueMap, getParamsNames, coloringCFG} from './code-analyzer';
+import {buildCFG, adaptViz, getValueMap, getParamsNames, coloringCFG} from './code-analyzer';
 import * as esprima from 'esprima';
-import * as esgraph from 'esgraph';
 import Viz from 'viz.js';
 import { Module, render } from 'viz.js/full.render.js';
 
